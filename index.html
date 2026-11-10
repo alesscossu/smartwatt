@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cardio</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 16px; max-width: 900px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  button { font-size: 18px; padding: 14px 20px; border: 0; border-radius: 10px; background: #2d6cdf; color: #fff; }
+  button.sec { background: #333; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+  #status { color: #999; font-size: 14px; }
+  #hero { text-align: center; border-radius: 16px; padding: 18px; background: #1c1c1c; border: 3px solid #333; }
+  #bpm { font-size: 110px; font-weight: 800; line-height: 1; }
+  #zone { font-size: 20px; margin-top: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+  .box { background: #1c1c1c; border-radius: 12px; padding: 10px; text-align: center; }
+  .box .v { font-size: 28px; font-weight: 700; }
+  .box .l { font-size: 12px; color: #999; }
+  canvas { width: 100%; height: 160px; background: #1c1c1c; border-radius: 12px; margin-top: 10px; }
+  input[type=number] { width: 90px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 16px; }
+  #zones div { display: flex; justify-content: space-between; padding: 6px 10px; border-left: 8px solid; margin: 4px 0; background: #1c1c1c; border-radius: 6px; }
+</style>
+</head>
+<body>
+<h1>❤️ Fascia cardio</h1>
+
+<div class="row">
+  <button id="btnConnect">Connetti fascia</button>
+  <label><input type="checkbox" id="chkAll"> mostra tutti i dispositivi</label>
+</div>
+<div id="status">Non connessa</div>
+
+<div id="hero">
+  <div id="bpm">--</div>
+  <div>bpm</div>
+  <div id="zone">&nbsp;</div>
+</div>
+
+<div class="grid">
+  <div class="box"><div class="v" id="vTime">00:00</div><div class="l">Tempo</div></div>
+  <div class="box"><div class="v" id="vAvg">--</div><div class="l">Media</div></div>
+  <div class="box"><div class="v" id="vMax">--</div><div class="l">Max</div></div>
+  <div class="box"><div class="v" id="vMin">--</div><div class="l">Min</div></div>
+</div>
+
+<canvas id="chart" width="800" height="320"></canvas>
+
+<div class="row">
+  <label>FC max <input type="number" id="maxhr" value="190" min="120" max="230"></label>
+  <button class="sec" id="btnReset">Azzera</button>
+  <button class="sec" id="btnCsv">Esporta CSV</button>
+</div>
+
+<div id="zones"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const HR_SERVICE = 0x180D, HR_CHAR = 0x2A37;
+const ZONES = [
+  { name: 'Z1 Recupero',   color: '#7f8c8d' },
+  { name: 'Z2 Fondo',      color: '#3498db' },
+  { name: 'Z3 Medio',      color: '#2ecc71' },
+  { name: 'Z4 Soglia',     color: '#f39c12' },
+  { name: 'Z5 Massimale',  color: '#e74c3c' },
+];
+
+let device = null, samples = [], zoneSecs = [0, 0, 0, 0, 0], lastT = null, wakeLock = null;
+let retries = 0;
+
+const maxHR = () => Number($('maxhr').value) || 190;
+const zoneOf = bpm => { const p = 100 * bpm / maxHR(); return p < 60 ? 0 : p < 70 ? 1 : p < 80 ? 2 : p < 90 ? 3 : 4; };
+const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+function setStatus(t) { $('status').textContent = t; }
+
+// ---------- Bluetooth ----------
+$('btnConnect').onclick = async () => {
+  if (!navigator.bluetooth) { setStatus('Web Bluetooth non disponibile: usa Chrome su Android (HTTPS).'); return; }
+  try {
+    const opts = $('chkAll').checked
+      ? { acceptAllDevices: true, optionalServices: [HR_SERVICE] }
+      : { filters: [{ services: [HR_SERVICE] }] };
+    setStatus('Ricerca…');
+    device = await navigator.bluetooth.requestDevice(opts);
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    await connectGatt();
+  } catch (err) {
+    setStatus('Errore: ' + err.message);
+  }
+};
+
+async function connectGatt() {
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(HR_SERVICE);
+  const ch = await svc.getCharacteristic(HR_CHAR);
+  await ch.startNotifications();
+  ch.addEventListener('characteristicvaluechanged', e => onHR(parseHR(e.target.value)));
+  retries = 0;
+  setStatus('Connessa a ' + (device.name || 'fascia'));
+  $('btnConnect').textContent = 'Connessa ✓';
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+
+async function onDisconnected() {
+  $('btnConnect').textContent = 'Connetti fascia';
+  if (retries < 10) {
+    retries++;
+    setStatus('Connessione persa, riprovo (' + retries + '/10)…');
+    setTimeout(() => connectGatt().catch(() => onDisconnected()), 2000);
+  } else {
+    setStatus('Fascia disconnessa');
+  }
+}
+
+// Heart Rate Measurement (0x2A37)
+function parseHR(dv) {
+  const f = dv.getUint8(0); let o = 1, bpm;
+  if (f & 1) { bpm = dv.getUint16(o, true); o += 2; } else { bpm = dv.getUint8(o); o += 1; }
+  const contactSupported = !!(f & 4), contact = !!(f & 2);
+  return { bpm, noContact: contactSupported && !contact };
+}
+
+// ---------- Dati ----------
+function onHR({ bpm, noContact }) {
+  if (noContact) { setStatus('Nessun contatto con la pelle: inumidisci la fascia'); return; }
+  if (!bpm) return;
+  const now = Date.now();
+  if (lastT !== null) zoneSecs[zoneOf(bpm)] += Math.min((now - lastT) / 1000, 5);
+  lastT = now;
+  samples.push({ t: now, bpm });
+  setStatus('Connessa a ' + (device && device.name ? device.name : 'fascia'));
+  render(bpm);
+}
+
+function render(bpm) {
+  const z = zoneOf(bpm);
+  $('bpm').textContent = bpm;
+  $('hero').style.borderColor = ZONES[z].color;
+  $('zone').textContent = ZONES[z].name;
+  $('zone').style.color = ZONES[z].color;
+
+  const vals = samples.map(s => s.bpm);
+  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+  $('vAvg').textContent = Math.round(avg);
+  $('vMax').textContent = Math.max(...vals);
+  $('vMin').textContent = Math.min(...vals);
+  $('vTime').textContent = mmss((samples[samples.length - 1].t - samples[0].t) / 1000);
+
+  $('zones').innerHTML = ZONES.map((zz, i) =>
+    `<div style="border-color:${zz.color}"><span>${zz.name}</span><span>${mmss(zoneSecs[i])}</span></div>`).join('');
+  drawChart();
+}
+
+function drawChart() {
+  const c = $('chart'), g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  const win = samples.slice(-300); // ultimi ~5 minuti
+  if (win.length < 2) return;
+  const lo = Math.max(40, Math.min(...win.map(s => s.bpm)) - 5);
+  const hi = Math.max(...win.map(s => s.bpm)) + 5;
+  g.lineWidth = 3; g.lineJoin = 'round'; g.strokeStyle = '#ff5a6e';
+  g.beginPath();
+  win.forEach((s, i) => {
+    const x = i / (win.length - 1) * c.width;
+    const y = c.height - (s.bpm - lo) / (hi - lo) * (c.height - 20) - 10;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+  g.fillStyle = '#888'; g.font = '20px sans-serif';
+  g.fillText(hi, 6, 22); g.fillText(lo, 6, c.height - 8);
+}
+
+$('btnReset').onclick = () => {
+  samples = []; zoneSecs = [0, 0, 0, 0, 0]; lastT = null;
+  ['vAvg', 'vMax', 'vMin'].forEach(id => $(id).textContent = '--');
+  $('vTime').textContent = '00:00'; $('bpm').textContent = '--'; $('zone').innerHTML = '&nbsp;';
+  $('hero').style.borderColor = '#333'; $('zones').innerHTML = '';
+  $('chart').getContext('2d').clearRect(0, 0, 800, 320);
+};
+
+$('btnCsv').onclick = () => {
+  if (!samples.length) return;
+  const t0 = samples[0].t;
+  const csv = 'secondi,bpm\n' + samples.map(s => ((s.t - t0) / 1000).toFixed(0) + ',' + s.bpm).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'cardio_' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.csv';
+  a.click();
+};
+</script>
+</body>
+</html>

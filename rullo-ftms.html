@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rullo</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 16px; max-width: 900px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  button { font-size: 18px; padding: 14px 20px; border: 0; border-radius: 10px; background: #2d6cdf; color: #fff; }
+  button.sec { background: #333; }
+  button.red { background: #c0392b; }
+  button:disabled { opacity: .4; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .box { background: #1c1c1c; border-radius: 12px; padding: 12px; text-align: center; }
+  .box .v { font-size: 44px; font-weight: 700; line-height: 1.1; }
+  .box .l { font-size: 13px; color: #999; }
+  .target .v { color: #f5a623; }
+  textarea, input[type=number] { background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 16px; }
+  textarea { width: 100%; height: 150px; font-family: monospace; }
+  input[type=number] { width: 90px; }
+  #bar { height: 12px; background: #2a2a2a; border-radius: 6px; overflow: hidden; margin: 8px 0; }
+  #bar div { height: 100%; width: 0; background: #2d6cdf; }
+  #status { color: #999; font-size: 14px; }
+  small { color: #888; }
+</style>
+</head>
+<body>
+<h1>🚴 Rullo – Elite Direto</h1>
+
+<div class="row">
+  <button id="btnConnect">Connetti rullo</button>
+  <label><input type="checkbox" id="chkAll"> mostra tutti i dispositivi</label>
+</div>
+<div id="status">Non connesso</div>
+
+<div class="grid" style="margin-top:12px">
+  <div class="box"><div class="v" id="vPower">--</div><div class="l">Watt</div></div>
+  <div class="box"><div class="v" id="vCad">--</div><div class="l">Cadenza (rpm)</div></div>
+  <div class="box"><div class="v" id="vSpeed">--</div><div class="l">km/h</div></div>
+</div>
+<div class="grid" style="margin-top:10px">
+  <div class="box target"><div class="v" id="vTarget">--</div><div class="l">Target (W)</div></div>
+  <div class="box"><div class="v" id="vStepLeft">--:--</div><div class="l">Fine intervallo</div></div>
+  <div class="box"><div class="v" id="vTotLeft">--:--</div><div class="l">Fine allenamento</div></div>
+</div>
+<div id="bar"><div id="barFill"></div></div>
+<div id="stepInfo" style="text-align:center;color:#999;font-size:14px"></div>
+
+<div class="row">
+  <button id="btnStart" disabled>▶ Avvia</button>
+  <button id="btnPause" class="sec" disabled>⏸ Pausa</button>
+  <button id="btnStop" class="red" disabled>⏹ Stop</button>
+</div>
+<div class="row">
+  <button id="btnMinus" class="sec">−5% </button>
+  <button id="btnPlus" class="sec">+5%</button>
+  <span id="adjInfo">Regolazione: 0%</span>
+</div>
+
+<div class="row">
+  <label>FTP (W) <input type="number" id="ftp" value="200" min="50" max="600"></label>
+</div>
+<div>
+  <strong>Allenamento</strong> <small>una riga per intervallo: minuti e % di FTP (es. “4 105”). Le righe con # sono ignorate.</small>
+  <textarea id="workout"># riscaldamento
+10 50
+# 3 ripetute
+4 100
+3 55
+4 100
+3 55
+4 100
+3 55
+# defaticamento
+5 45</textarea>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const FTMS = 0x1826, BIKE_DATA = 0x2AD2, CONTROL = 0x2AD9;
+
+let device = null, ctrl = null, queue = Promise.resolve();
+let steps = [], idx = 0, stepElapsed = 0, totalElapsed = 0, totalDur = 0;
+let running = false, paused = false, timer = null, adj = 0, wakeLock = null;
+
+function setStatus(t) { $('status').textContent = t; }
+
+// ---------- Bluetooth ----------
+$('btnConnect').onclick = async () => {
+  if (!navigator.bluetooth) { setStatus('Web Bluetooth non disponibile: usa Chrome su Android (HTTPS).'); return; }
+  try {
+    const opts = $('chkAll').checked
+      ? { acceptAllDevices: true, optionalServices: [FTMS] }
+      : { filters: [{ services: [FTMS] }] };
+    setStatus('Ricerca…');
+    device = await navigator.bluetooth.requestDevice(opts);
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(FTMS);
+    const bike = await svc.getCharacteristic(BIKE_DATA);
+    await bike.startNotifications();
+    bike.addEventListener('characteristicvaluechanged', e => showData(parseBike(e.target.value)));
+    ctrl = await svc.getCharacteristic(CONTROL);
+    await ctrl.startNotifications(); // indicazioni di risposta
+    ctrl.addEventListener('characteristicvaluechanged', e => {
+      const d = new Uint8Array(e.target.value.buffer);
+      if (d[0] === 0x80 && d[2] !== 0x01) setStatus('Il rullo ha rifiutato il comando 0x' + d[1].toString(16) + ' (codice ' + d[2] + ')');
+    });
+    setStatus('Connesso a ' + (device.name || 'rullo'));
+    $('btnConnect').textContent = 'Connesso ✓';
+    $('btnStart').disabled = false;
+  } catch (err) {
+    setStatus('Errore: ' + err.message);
+  }
+};
+
+function onDisconnected() {
+  setStatus('Rullo disconnesso');
+  $('btnConnect').textContent = 'Connetti rullo';
+  $('btnStart').disabled = true;
+  if (running) stopWorkout(false);
+}
+
+// Indoor Bike Data (0x2AD2)
+function parseBike(dv) {
+  const f = dv.getUint16(0, true); let o = 2; const r = {};
+  if (!(f & 1)) { r.speed = dv.getUint16(o, true) * 0.01; o += 2; }
+  if (f & 2) o += 2;
+  if (f & 4) { r.cad = dv.getUint16(o, true) * 0.5; o += 2; }
+  if (f & 8) o += 2;
+  if (f & 16) o += 3;
+  if (f & 32) o += 2;
+  if (f & 64) { r.power = dv.getInt16(o, true); o += 2; }
+  return r;
+}
+function showData(r) {
+  if (r.power !== undefined) $('vPower').textContent = r.power;
+  if (r.cad !== undefined) $('vCad').textContent = Math.round(r.cad);
+  if (r.speed !== undefined) $('vSpeed').textContent = r.speed.toFixed(1);
+}
+
+// scritture serializzate sul Control Point
+function send(bytes) {
+  queue = queue.then(() => {
+    const v = new Uint8Array(bytes);
+    return ctrl.writeValueWithResponse ? ctrl.writeValueWithResponse(v) : ctrl.writeValue(v);
+  }).catch(e => setStatus('Errore comando: ' + e.message));
+  return queue;
+}
+function setPower(w) { w = Math.max(0, Math.round(w)); return send([0x05, w & 0xff, (w >> 8) & 0xff]); }
+
+// ---------- Allenamento ----------
+function parseWorkout() {
+  const out = [];
+  for (const raw of $('workout').value.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = line.replace(/,/g, '.').split(/\s+/).map(Number);
+    if (m.length >= 2 && m[0] > 0 && m[1] >= 0) out.push({ dur: Math.round(m[0] * 60), pct: m[1] });
+  }
+  return out;
+}
+const ftp = () => Number($('ftp').value) || 200;
+const targetW = () => Math.round(ftp() * Math.max(0, steps[idx].pct + adj) / 100);
+const mmss = s => { s = Math.max(0, s); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+
+function applyTarget() { setPower(targetW()); render(); }
+
+function render() {
+  if (!steps.length || !running) return;
+  $('vTarget').textContent = targetW();
+  $('vStepLeft').textContent = mmss(steps[idx].dur - stepElapsed);
+  $('vTotLeft').textContent = mmss(totalDur - totalElapsed);
+  $('barFill').style.width = (100 * totalElapsed / totalDur) + '%';
+  $('stepInfo').textContent = 'Intervallo ' + (idx + 1) + ' / ' + steps.length + ' – ' + steps[idx].pct + '% FTP';
+  $('adjInfo').textContent = 'Regolazione: ' + (adj > 0 ? '+' : '') + adj + '%';
+}
+
+async function startWorkout() {
+  steps = parseWorkout();
+  if (!steps.length) { setStatus('Allenamento vuoto o non valido'); return; }
+  totalDur = steps.reduce((a, s) => a + s.dur, 0);
+  idx = 0; stepElapsed = 0; totalElapsed = 0; adj = 0; running = true; paused = false;
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  send([0x00]);        // richiedi controllo
+  send([0x07]);        // start
+  applyTarget();
+  timer = setInterval(tick, 1000);
+  $('btnStart').disabled = true; $('btnPause').disabled = false; $('btnStop').disabled = false;
+  setStatus('Allenamento in corso');
+}
+
+function tick() {
+  if (paused) return;
+  stepElapsed++; totalElapsed++;
+  if (stepElapsed >= steps[idx].dur) {
+    idx++; stepElapsed = 0;
+    if (idx >= steps.length) { stopWorkout(true); return; }
+    if (navigator.vibrate) navigator.vibrate(300);
+    applyTarget();
+  }
+  render();
+}
+
+function togglePause() {
+  if (!running) return;
+  paused = !paused;
+  if (paused) { send([0x08, 0x02]); $('btnPause').textContent = '▶ Riprendi'; setStatus('In pausa'); }
+  else { send([0x07]); applyTarget(); $('btnPause').textContent = '⏸ Pausa'; setStatus('Allenamento in corso'); }
+}
+
+function stopWorkout(finished) {
+  clearInterval(timer); running = false; paused = false;
+  if (ctrl && device && device.gatt.connected) send([0x08, 0x01]);
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  $('btnStart').disabled = !(device && device.gatt.connected);
+  $('btnPause').disabled = true; $('btnPause').textContent = '⏸ Pausa'; $('btnStop').disabled = true;
+  $('vTarget').textContent = '--'; $('vStepLeft').textContent = '--:--'; $('vTotLeft').textContent = '--:--';
+  $('barFill').style.width = finished ? '100%' : '0';
+  setStatus(finished ? 'Allenamento completato 🎉' : 'Fermato');
+}
+
+$('btnStart').onclick = startWorkout;
+$('btnPause').onclick = togglePause;
+$('btnStop').onclick = () => stopWorkout(false);
+$('btnPlus').onclick = () => { adj += 5; if (running && !paused) applyTarget(); else $('adjInfo').textContent = 'Regolazione: ' + adj + '%'; };
+$('btnMinus').onclick = () => { adj -= 5; if (running && !paused) applyTarget(); else $('adjInfo').textContent = 'Regolazione: ' + adj + '%'; };
+</script>
+</body>
+</html>
