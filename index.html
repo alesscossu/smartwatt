@@ -39,6 +39,8 @@
   #zonesMsg.err { color: #ff6b6b; }
   #rec { font-size: 15px; color: #ff6b6b; }
   .legend { font-size: 12px; color: #999; margin-top: 4px; }
+  .sub { font-size: 13px; color: #999; margin: 14px 0 4px; }
+  #boxPower { border: 3px solid #1c1c1c; }
 </style>
 </head>
 <body>
@@ -60,7 +62,7 @@
 </div>
 
 <div class="grid g4">
-  <div class="box"><div class="v" id="vPower">--</div><div class="l">Watt</div></div>
+  <div class="box" id="boxPower"><div class="v" id="vPower">--</div><div class="l" id="pzLabel">Watt</div></div>
   <div class="box target"><div class="v" id="vTarget">--</div><div class="l">Target (W)</div></div>
   <div class="box"><div class="v" id="vCad">--</div><div class="l">Cadenza</div></div>
   <div class="box"><div class="v" id="vSpeed">--</div><div class="l">km/h</div></div>
@@ -96,6 +98,9 @@
 <canvas id="chart" width="800" height="340"></canvas>
 <div class="legend"><span style="color:#4aa3ff">■ Watt</span> &nbsp; <span style="color:#f5a623">■ Target</span> &nbsp; <span style="color:#ff5a6e">■ FC</span> &nbsp; (ultimi 10 minuti)</div>
 
+<div class="sub">Tempo nelle zone di potenza</div>
+<div id="pzones"></div>
+<div class="sub">Tempo nelle zone cardio</div>
 <div id="zones"></div>
 
 <div class="row">
@@ -133,6 +138,19 @@
     <button class="sec" id="btnAutoZones">Zone automatiche</button>
   </div>
   <div id="zonesMsg"></div>
+</details>
+
+<details id="pzCfg">
+  <summary>Zone di potenza personalizzate</summary>
+  <p>Una zona per riga: <b>nome, min, max</b> in watt (anche solo “min, max”), oppure un file .json come per le zone cardio.
+  Se non importi nulla, le zone sono calcolate in % dell'FTP (modello a 7 zone di Coggan). Le zone personalizzate restano fisse in watt anche se cambi l'FTP.</p>
+  <textarea id="pzTxt" spellcheck="false"></textarea>
+  <div class="row">
+    <button class="sec" id="btnApplyPz">Applica</button>
+    <label class="filebtn">Importa file<input type="file" id="pzFile" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden></label>
+    <button class="sec" id="btnAutoPz">Zone automatiche</button>
+  </div>
+  <div id="pzMsg"></div>
 </details>
 
 <script>
@@ -235,7 +253,6 @@ let live = { pw: null, cad: null, spd: null, bikeT: 0, hr: null, hrT: 0 };
 let session = newSession();
 let steps = [], idx = 0, stepElapsed = 0, totalDur = 0, elapsed = 0, adj = 0;
 let running = false, paused = false, timer = null, wakeLock = null;
-let customZones = null;
 const retries = { t: 0, h: 0 };
 
 const mmss = s => { s = Math.max(0, Math.floor(s)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
@@ -245,9 +262,9 @@ const setH = t => { $('stH').textContent = 'Fascia: ' + t; };
 const trainerOk = () => !!(trainer && trainer.gatt && trainer.gatt.connected && ctrl);
 const hrOk = () => !!(hrDev && hrDev.gatt && hrDev.gatt.connected);
 
-// ---------- Zone cardio ----------
+// ---------- Zone (cardio e potenza) ----------
 const maxHR = () => Number($('maxhr').value) || 190;
-function autoZones() {
+function autoHRZones() {
   const m = maxHR(), pct = [0, 60, 70, 80, 90];
   const names = ['Z1 Recupero', 'Z2 Fondo', 'Z3 Medio', 'Z4 Soglia', 'Z5 Massimale'];
   return names.map((n, i) => ({
@@ -256,37 +273,56 @@ function autoZones() {
     max: i < 4 ? Math.round(m * pct[i + 1] / 100) - 1 : m,
   }));
 }
-const getZones = () => customZones || autoZones();
+function autoPWZones() {
+  const f = ftp(), pct = [0, 56, 76, 91, 106, 121, 151];
+  const names = ['Z1 Recupero', 'Z2 Resistenza', 'Z3 Tempo', 'Z4 Soglia', 'Z5 VO2max', 'Z6 Anaerobica', 'Z7 Neuromuscolare'];
+  const mins = pct.map(p => Math.round(f * p / 100));
+  return names.map((n, i) => ({ name: n, min: mins[i], max: i < 6 ? mins[i + 1] - 1 : Math.round(f * 3) }));
+}
+const ZS = {
+  hr: { key: 'zones', custom: null, auto: autoHRZones, txt: 'zonesTxt', msg: 'zonesMsg', list: 'zones',
+        apply: 'btnApplyZones', file: 'zonesFile', autoBtn: 'btnAutoZones', autoMsg: 'Zone automatiche (% della FC max)',
+        series: () => session.hr, after: () => showHR() },
+  pw: { key: 'pzones', custom: null, auto: autoPWZones, txt: 'pzTxt', msg: 'pzMsg', list: 'pzones',
+        apply: 'btnApplyPz', file: 'pzFile', autoBtn: 'btnAutoPz', autoMsg: "Zone automatiche (% dell'FTP)",
+        series: () => session.pw, after: () => showBike() },
+};
+const getZones = k => ZS[k].custom || ZS[k].auto();
 const zoneColor = i => i < 0 ? '#555' : PALETTE[i % PALETTE.length];
 
 function renderZones() {
-  const zs = getZones(), secs = {};
-  for (const v of session.hr) if (v !== null) { const z = zoneIndex(zs, v); secs[z] = (secs[z] || 0) + 1; }
-  let html = zs.map((z, i) =>
-    `<div style="border-color:${zoneColor(i)}"><span>${z.name} <small>(${z.min}–${z.max})</small></span><span>${mmss(secs[i] || 0)}</span></div>`).join('');
-  if (secs[-1] > 0) html = `<div style="border-color:#555"><span>Sotto le zone</span><span>${mmss(secs[-1])}</span></div>` + html;
-  $('zones').innerHTML = html;
+  for (const k of ['hr', 'pw']) {
+    const zs = getZones(k), secs = {};
+    for (const v of ZS[k].series()) if (v !== null) { const z = zoneIndex(zs, v); secs[z] = (secs[z] || 0) + 1; }
+    let html = zs.map((z, i) =>
+      `<div style="border-color:${zoneColor(i)}"><span>${z.name} <small>(${z.min}–${z.max})</small></span><span>${mmss(secs[i] || 0)}</span></div>`).join('');
+    if (secs[-1] > 0) html = `<div style="border-color:#555"><span>Sotto le zone</span><span>${mmss(secs[-1])}</span></div>` + html;
+    $(ZS[k].list).innerHTML = html;
+  }
 }
-function zonesChanged() { $('zonesTxt').value = zonesToText(getZones()); renderZones(); showHR(); }
-function msg(t, err) { const m = $('zonesMsg'); m.textContent = t; m.className = err ? 'err' : ''; }
+function zonesChanged(k) { $(ZS[k].txt).value = zonesToText(getZones(k)); renderZones(); ZS[k].after(); }
+function zmsg(k, t, err) { const m = $(ZS[k].msg); m.textContent = t; m.className = err ? 'err' : ''; }
 
-function applyZonesText(txt) {
+function applyZonesText(k, txt) {
   try {
-    customZones = parseZones(txt);
-    store.set('zones', JSON.stringify(customZones));
-    zonesChanged();
-    msg('Zone applicate: ' + customZones.length);
-  } catch (e) { msg(e.message, true); }
+    ZS[k].custom = parseZones(txt);
+    store.set(ZS[k].key, JSON.stringify(ZS[k].custom));
+    zonesChanged(k);
+    zmsg(k, 'Zone applicate: ' + ZS[k].custom.length);
+  } catch (e) { zmsg(k, e.message, true); }
 }
-$('btnApplyZones').onclick = () => applyZonesText($('zonesTxt').value);
-$('zonesFile').onchange = async e => {
-  const f = e.target.files[0]; if (!f) return;
-  $('zonesTxt').value = await f.text();
-  applyZonesText($('zonesTxt').value);
-  e.target.value = '';
-};
-$('btnAutoZones').onclick = () => { customZones = null; store.set('zones', null); zonesChanged(); msg('Zone automatiche (% della FC max)'); };
-$('maxhr').onchange = () => { store.set('maxhr', $('maxhr').value); if (!customZones) zonesChanged(); };
+for (const k of ['hr', 'pw']) {
+  const c = ZS[k];
+  $(c.apply).onclick = () => applyZonesText(k, $(c.txt).value);
+  $(c.file).onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    $(c.txt).value = await f.text();
+    applyZonesText(k, $(c.txt).value);
+    e.target.value = '';
+  };
+  $(c.autoBtn).onclick = () => { c.custom = null; store.set(c.key, null); zonesChanged(k); zmsg(k, c.autoMsg); };
+}
+$('maxhr').onchange = () => { store.set('maxhr', $('maxhr').value); if (!ZS.hr.custom) zonesChanged('hr'); };
 
 // ---------- Bluetooth: rullo ----------
 async function connectTrainer() {
@@ -349,6 +385,11 @@ function showBike() {
   $('vPower').textContent = live.pw ?? '--';
   $('vCad').textContent = live.cad ?? '--';
   $('vSpeed').textContent = live.spd !== null ? live.spd.toFixed(1) : '--';
+  const zs = getZones('pw'), z = live.pw === null ? -1 : zoneIndex(zs, live.pw);
+  const col = live.pw === null ? '#999' : zoneColor(z);
+  $('boxPower').style.borderColor = live.pw === null ? '#1c1c1c' : col;
+  $('pzLabel').textContent = live.pw === null ? 'Watt' : 'Watt · ' + (z < 0 ? 'sotto le zone' : zs[z].name);
+  $('pzLabel').style.color = col;
 }
 
 // ---------- Bluetooth: fascia cardio ----------
@@ -392,7 +433,7 @@ function onHR({ bpm, noContact }) {
 }
 function showHR() {
   if (live.hr === null) return;
-  const zs = getZones(), z = zoneIndex(zs, live.hr);
+  const zs = getZones('hr'), z = zoneIndex(zs, live.hr);
   $('bpm').textContent = live.hr;
   $('hero').style.borderColor = zoneColor(z);
   $('zone').textContent = z < 0 ? 'Sotto le zone' : zs[z].name;
@@ -486,7 +527,7 @@ $('btnStop').onclick = () => stopSession(false);
 const bump = d => { adj += d; if (running && !paused) applyTarget(); else $('adjInfo').textContent = 'Regolazione: ' + (adj > 0 ? '+' : '') + adj + '%'; };
 $('btnPlus').onclick = () => bump(5);
 $('btnMinus').onclick = () => bump(-5);
-$('ftp').onchange = () => { store.set('ftp', $('ftp').value); if (running && !paused) applyTarget(); };
+$('ftp').onchange = () => { store.set('ftp', $('ftp').value); if (!ZS.pw.custom) zonesChanged('pw'); if (running && !paused) applyTarget(); };
 $('workout').onchange = () => store.set('workout', $('workout').value);
 
 // ---------- Salvataggio ed export ----------
@@ -577,9 +618,11 @@ function drawChart() {
   const mh = store.get('maxhr'); if (mh) $('maxhr').value = mh;
   const f = store.get('ftp'); if (f) $('ftp').value = f;
   const w = store.get('workout'); if (w) $('workout').value = w;
-  try { const z = JSON.parse(store.get('zones') || 'null'); if (Array.isArray(z) && z.length) customZones = parseZones(zonesToText(z)); } catch (e) { customZones = null; }
-  $('zonesTxt').value = zonesToText(getZones());
-  if (customZones) msg('Zone personalizzate caricate (' + customZones.length + ')');
+  for (const k of ['hr', 'pw']) {
+    try { const z = JSON.parse(store.get(ZS[k].key) || 'null'); if (Array.isArray(z) && z.length) ZS[k].custom = parseZones(zonesToText(z)); } catch (e) { ZS[k].custom = null; }
+    $(ZS[k].txt).value = zonesToText(getZones(k));
+    if (ZS[k].custom) zmsg(k, 'Zone personalizzate caricate (' + ZS[k].custom.length + ')');
+  }
   const saved = loadSession();
   if (saved) {
     session = saved; elapsed = saved.tg.length;
