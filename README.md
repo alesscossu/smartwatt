@@ -1,8 +1,8 @@
 # smartwatt
 
-Web app (PWA-style, Web Bluetooth) per allenamenti in bici.
+Web app (Web Bluetooth) per allenarsi in bici con rullo Elite (FTMS, ERG) e fascia cardio.
 
-- `index.html` – fascia cardio (Bluetooth Heart Rate): bpm, zone, grafico, export CSV
-- `rullo-ftms.html` – controllo rullo Elite Direto via FTMS (ERG, allenamenti a intervalli), da testare
+- `index.html` – app completa: controllo rullo in ERG con allenamento a intervalli, fascia cardio con zone personalizzabili, Start/Pausa/Stop, salvataggio ed export CSV
+- `cardio.html` – versione solo fascia cardio (utile per provare la fascia da sola)
 
-Richiede Chrome su Android e HTTPS (GitHub Pages).
+Richiede Chrome (o altro browser Chromium) su Android e HTTPS (GitHub Pages).

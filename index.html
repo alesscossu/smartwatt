@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Cardio</title>
+<title>SmartWatt</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -15,38 +15,55 @@
   button.green { background: #1e8e4e; }
   button:disabled { opacity: .4; }
   .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
-  #status { color: #999; font-size: 14px; }
-  #hero { text-align: center; border-radius: 16px; padding: 18px; background: #1c1c1c; border: 3px solid #333; }
-  #bpm { font-size: 110px; font-weight: 800; line-height: 1; }
-  #zone { font-size: 20px; margin-top: 6px; }
-  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+  .st { color: #999; font-size: 14px; margin: 4px 0; }
+  .grid { display: grid; gap: 10px; margin-top: 10px; }
+  .g4 { grid-template-columns: repeat(4, 1fr); }
+  .g2 { grid-template-columns: repeat(2, 1fr); }
   .box { background: #1c1c1c; border-radius: 12px; padding: 10px; text-align: center; }
-  .box .v { font-size: 28px; font-weight: 700; }
+  .box .v { font-size: 34px; font-weight: 700; line-height: 1.15; }
   .box .l { font-size: 12px; color: #999; }
-  canvas { width: 100%; height: 160px; background: #1c1c1c; border-radius: 12px; margin-top: 10px; }
+  .target .v { color: #f5a623; }
+  #hero { text-align: center; border-radius: 16px; padding: 14px; background: #1c1c1c; border: 3px solid #333; margin-top: 10px; }
+  #bpm { font-size: 90px; font-weight: 800; line-height: 1; }
+  #zone { font-size: 20px; margin-top: 4px; }
+  #bar { height: 12px; background: #2a2a2a; border-radius: 6px; overflow: hidden; margin: 10px 0 4px; }
+  #bar div { height: 100%; width: 0; background: #2d6cdf; }
+  #stepInfo { text-align: center; color: #999; font-size: 14px; min-height: 18px; }
+  canvas { width: 100%; height: 170px; background: #1c1c1c; border-radius: 12px; margin-top: 10px; }
   input[type=number] { width: 90px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 16px; }
-  textarea { width: 100%; height: 140px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 15px; font-family: monospace; }
+  textarea { width: 100%; height: 150px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 15px; font-family: monospace; }
   #zones div { display: flex; justify-content: space-between; padding: 6px 10px; border-left: 8px solid; margin: 4px 0; background: #1c1c1c; border-radius: 6px; }
   details { background: #1c1c1c; border-radius: 12px; padding: 10px 14px; margin-top: 12px; }
   summary { font-size: 17px; padding: 6px 0; }
-  details p, #zonesMsg { font-size: 13px; color: #999; }
+  details p, #zonesMsg, small { font-size: 13px; color: #999; }
   #zonesMsg.err { color: #ff6b6b; }
   #rec { font-size: 15px; color: #ff6b6b; }
+  .legend { font-size: 12px; color: #999; margin-top: 4px; }
 </style>
 </head>
 <body>
-<h1>❤️ Fascia cardio</h1>
+<h1>🚴 SmartWatt</h1>
 
 <div class="row">
-  <button id="btnConnect">Connetti fascia</button>
+  <button id="btnTrainer">Connetti rullo</button>
+  <button id="btnHR">Connetti fascia</button>
   <label><input type="checkbox" id="chkAll"> mostra tutti i dispositivi</label>
 </div>
-<div id="status">Non connessa</div>
+<div class="st" id="stT">Rullo: non connesso</div>
+<div class="st" id="stH">Fascia: non connessa</div>
 
 <div class="row">
   <button id="btnStart" class="green">▶ Start</button>
+  <button id="btnPause" class="sec" disabled>⏸ Pausa</button>
   <button id="btnStop" class="red" disabled>⏹ Stop</button>
   <span id="rec"></span>
+</div>
+
+<div class="grid g4">
+  <div class="box"><div class="v" id="vPower">--</div><div class="l">Watt</div></div>
+  <div class="box target"><div class="v" id="vTarget">--</div><div class="l">Target (W)</div></div>
+  <div class="box"><div class="v" id="vCad">--</div><div class="l">Cadenza</div></div>
+  <div class="box"><div class="v" id="vSpeed">--</div><div class="l">km/h</div></div>
 </div>
 
 <div id="hero">
@@ -55,22 +72,53 @@
   <div id="zone">&nbsp;</div>
 </div>
 
-<div class="grid">
-  <div class="box"><div class="v" id="vTime">00:00</div><div class="l">Tempo</div></div>
-  <div class="box"><div class="v" id="vAvg">--</div><div class="l">Media</div></div>
-  <div class="box"><div class="v" id="vMax">--</div><div class="l">Max</div></div>
-  <div class="box"><div class="v" id="vMin">--</div><div class="l">Min</div></div>
+<div class="grid g2">
+  <div class="box"><div class="v" id="vStepLeft">--:--</div><div class="l">Fine intervallo</div></div>
+  <div class="box"><div class="v" id="vTotLeft">--:--</div><div class="l">Fine allenamento</div></div>
 </div>
-
-<canvas id="chart" width="800" height="320"></canvas>
+<div id="bar"><div id="barFill"></div></div>
+<div id="stepInfo"></div>
 
 <div class="row">
-  <label>FC max <input type="number" id="maxhr" value="190" min="120" max="230"></label>
+  <button id="btnMinus" class="sec">−5%</button>
+  <button id="btnPlus" class="sec">+5%</button>
+  <span id="adjInfo">Regolazione: 0%</span>
+  <label>FTP (W) <input type="number" id="ftp" value="200" min="50" max="600"></label>
+</div>
+
+<div class="grid g4">
+  <div class="box"><div class="v" id="vTime">00:00</div><div class="l">Tempo</div></div>
+  <div class="box"><div class="v" id="vHrAvg">--</div><div class="l">FC media</div></div>
+  <div class="box"><div class="v" id="vHrMax">--</div><div class="l">FC max</div></div>
+  <div class="box"><div class="v" id="vPwAvg">--</div><div class="l">Watt medi</div></div>
+</div>
+
+<canvas id="chart" width="800" height="340"></canvas>
+<div class="legend"><span style="color:#4aa3ff">■ Watt</span> &nbsp; <span style="color:#f5a623">■ Target</span> &nbsp; <span style="color:#ff5a6e">■ FC</span> &nbsp; (ultimi 10 minuti)</div>
+
+<div id="zones"></div>
+
+<div class="row">
   <button class="sec" id="btnReset">Azzera</button>
   <button class="sec" id="btnCsv">Esporta CSV</button>
 </div>
+<div class="st" id="sessInfo"></div>
 
-<div id="zones"></div>
+<details id="wkCfg">
+  <summary>Allenamento</summary>
+  <p>Una riga per intervallo: <b>minuti</b> e <b>% di FTP</b> (es. “4 105”). Le righe con # sono ignorate. Se è vuoto, registra senza controllare il rullo.</p>
+  <textarea id="workout" spellcheck="false"># riscaldamento
+10 50
+# 3 ripetute
+4 100
+3 55
+4 100
+3 55
+4 100
+3 55
+# defaticamento
+5 45</textarea>
+</details>
 
 <details id="zonesCfg">
   <summary>Zone cardio personalizzate</summary>
@@ -79,6 +127,7 @@
   Se non importi nulla, le zone sono calcolate in % della FC max.</p>
   <textarea id="zonesTxt" spellcheck="false"></textarea>
   <div class="row">
+    <label>FC max <input type="number" id="maxhr" value="190" min="120" max="230"></label>
     <button class="sec" id="btnApplyZones">Applica</button>
     <label class="filebtn">Importa file<input type="file" id="zonesFile" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden></label>
     <button class="sec" id="btnAutoZones">Zone automatiche</button>
@@ -88,23 +137,8 @@
 
 <script>
 const $ = id => document.getElementById(id);
-const HR_SERVICE = 0x180D, HR_CHAR = 0x2A37;
+const FTMS = 0x1826, BIKE_DATA = 0x2AD2, CONTROL = 0x2AD9, HR_SERVICE = 0x180D, HR_CHAR = 0x2A37;
 const PALETTE = ['#7f8c8d', '#3498db', '#2ecc71', '#f1c40f', '#f39c12', '#e74c3c', '#9b59b6'];
-
-let device = null, samples = [], zoneSecs = {}, recSecs = 0, lastT = null;
-let recording = false, wakeLock = null, retries = 0, customZones = null;
-
-const store = {
-  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
-  set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
-};
-const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0');
-const isConnected = () => !!(device && device.gatt && device.gatt.connected);
-function setStatus(t) { $('status').textContent = t; }
-function statusLine() {
-  const n = device && device.name ? device.name : 'fascia';
-  setStatus((recording ? 'Registrazione in corso – ' : 'Connessa a ') + n);
-}
 
 // <pure>
 function zoneIndex(zones, bpm) {
@@ -153,9 +187,65 @@ function parseZones(txt) {
   });
   return zs;
 }
+function parseWorkout(txt) {
+  const out = [];
+  for (const raw of (txt || '').split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const m = line.replace(/,/g, '.').split(/\s+/).map(Number);
+    if (m.length >= 2 && m[0] > 0 && m[1] >= 0) out.push({ dur: Math.round(m[0] * 60), pct: m[1] });
+  }
+  return out;
+}
+// Indoor Bike Data (0x2AD2)
+function parseBike(dv) {
+  const f = dv.getUint16(0, true); let o = 2; const r = {};
+  if (!(f & 1)) { r.speed = dv.getUint16(o, true) * 0.01; o += 2; }
+  if (f & 2) o += 2;
+  if (f & 4) { r.cad = dv.getUint16(o, true) * 0.5; o += 2; }
+  if (f & 8) o += 2;
+  if (f & 16) o += 3;
+  if (f & 32) o += 2;
+  if (f & 64) { r.power = dv.getInt16(o, true); o += 2; }
+  return r;
+}
+// Heart Rate Measurement (0x2A37)
+function parseHR(dv) {
+  const f = dv.getUint8(0); let o = 1, bpm;
+  if (f & 1) { bpm = dv.getUint16(o, true); o += 2; } else { bpm = dv.getUint8(o); o += 1; }
+  return { bpm, noContact: !!(f & 4) && !(f & 2) };
+}
+function toCSV(s) {
+  const v = x => (x === null || x === undefined) ? '' : x;
+  const rows = ['secondi,target_w,watt,cadenza,velocita_kmh,bpm'];
+  for (let i = 0; i < s.tg.length; i++) rows.push([i + 1, v(s.tg[i]), v(s.pw[i]), v(s.cad[i]), v(s.spd[i]), v(s.hr[i])].join(','));
+  return rows.join('\n');
+}
 // </pure>
 
-// ---------- Zone ----------
+// ---------- Stato ----------
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
+};
+const newSession = () => ({ start: new Date().toISOString(), pw: [], cad: [], spd: [], hr: [], tg: [] });
+
+let trainer = null, ctrl = null, hrDev = null, queue = Promise.resolve();
+let live = { pw: null, cad: null, spd: null, bikeT: 0, hr: null, hrT: 0 };
+let session = newSession();
+let steps = [], idx = 0, stepElapsed = 0, totalDur = 0, elapsed = 0, adj = 0;
+let running = false, paused = false, timer = null, wakeLock = null;
+let customZones = null;
+const retries = { t: 0, h: 0 };
+
+const mmss = s => { s = Math.max(0, Math.floor(s)); return String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0'); };
+const fresh = t => Date.now() - t < 5000;
+const setT = t => { $('stT').textContent = 'Rullo: ' + t; };
+const setH = t => { $('stH').textContent = 'Fascia: ' + t; };
+const trainerOk = () => !!(trainer && trainer.gatt && trainer.gatt.connected && ctrl);
+const hrOk = () => !!(hrDev && hrDev.gatt && hrDev.gatt.connected);
+
+// ---------- Zone cardio ----------
 const maxHR = () => Number($('maxhr').value) || 190;
 function autoZones() {
   const m = maxHR(), pct = [0, 60, 70, 80, 90];
@@ -167,23 +257,17 @@ function autoZones() {
   }));
 }
 const getZones = () => customZones || autoZones();
-const zoneOf = bpm => zoneIndex(getZones(), bpm);
 const zoneColor = i => i < 0 ? '#555' : PALETTE[i % PALETTE.length];
-const zoneName = i => i < 0 ? 'Sotto le zone' : getZones()[i].name;
 
 function renderZones() {
-  const zs = getZones();
+  const zs = getZones(), secs = {};
+  for (const v of session.hr) if (v !== null) { const z = zoneIndex(zs, v); secs[z] = (secs[z] || 0) + 1; }
   let html = zs.map((z, i) =>
-    `<div style="border-color:${zoneColor(i)}"><span>${z.name} <small>(${z.min}–${z.max})</small></span><span>${mmss(zoneSecs[i] || 0)}</span></div>`).join('');
-  if (zoneSecs[-1] > 0) html = `<div style="border-color:#555"><span>Sotto le zone</span><span>${mmss(zoneSecs[-1])}</span></div>` + html;
+    `<div style="border-color:${zoneColor(i)}"><span>${z.name} <small>(${z.min}–${z.max})</small></span><span>${mmss(secs[i] || 0)}</span></div>`).join('');
+  if (secs[-1] > 0) html = `<div style="border-color:#555"><span>Sotto le zone</span><span>${mmss(secs[-1])}</span></div>` + html;
   $('zones').innerHTML = html;
 }
-
-function zonesChanged() {
-  zoneSecs = {};
-  $('zonesTxt').value = zonesToText(getZones());
-  renderZones();
-}
+function zonesChanged() { $('zonesTxt').value = zonesToText(getZones()); renderZones(); showHR(); }
 function msg(t, err) { const m = $('zonesMsg'); m.textContent = t; m.className = err ? 'err' : ''; }
 
 function applyZonesText(txt) {
@@ -191,7 +275,7 @@ function applyZonesText(txt) {
     customZones = parseZones(txt);
     store.set('zones', JSON.stringify(customZones));
     zonesChanged();
-    msg('Zone applicate: ' + customZones.length + (samples.length ? ' (i tempi per zona sono stati azzerati)' : ''));
+    msg('Zone applicate: ' + customZones.length);
   } catch (e) { msg(e.message, true); }
 }
 $('btnApplyZones').onclick = () => applyZonesText($('zonesTxt').value);
@@ -201,112 +285,258 @@ $('zonesFile').onchange = async e => {
   applyZonesText($('zonesTxt').value);
   e.target.value = '';
 };
-$('btnAutoZones').onclick = () => {
-  customZones = null; store.set('zones', null); zonesChanged();
-  msg('Zone automatiche (% della FC max)');
-};
+$('btnAutoZones').onclick = () => { customZones = null; store.set('zones', null); zonesChanged(); msg('Zone automatiche (% della FC max)'); };
 $('maxhr').onchange = () => { store.set('maxhr', $('maxhr').value); if (!customZones) zonesChanged(); };
 
-// ---------- Bluetooth ----------
-async function connectDevice() {
-  if (!navigator.bluetooth) { setStatus('Web Bluetooth non disponibile: usa Chrome su Android (HTTPS).'); return; }
+// ---------- Bluetooth: rullo ----------
+async function connectTrainer() {
+  if (!navigator.bluetooth) { setT('Web Bluetooth non disponibile: usa Chrome su Android (HTTPS).'); return; }
   try {
-    const opts = $('chkAll').checked
-      ? { acceptAllDevices: true, optionalServices: [HR_SERVICE] }
-      : { filters: [{ services: [HR_SERVICE] }] };
-    setStatus('Ricerca…');
-    device = await navigator.bluetooth.requestDevice(opts);
-    device.addEventListener('gattserverdisconnected', onDisconnected);
-    await connectGatt();
-  } catch (err) {
-    setStatus('Errore: ' + err.message);
-  }
+    const o = $('chkAll').checked ? { acceptAllDevices: true, optionalServices: [FTMS] } : { filters: [{ services: [FTMS] }] };
+    setT('ricerca…');
+    trainer = await navigator.bluetooth.requestDevice(o);
+    trainer.addEventListener('gattserverdisconnected', onTrainerDisc);
+    await trainerGatt();
+  } catch (e) { setT('errore: ' + e.message); }
 }
-$('btnConnect').onclick = connectDevice;
+async function trainerGatt() {
+  const server = await trainer.gatt.connect();
+  const svc = await server.getPrimaryService(FTMS);
+  const bike = await svc.getCharacteristic(BIKE_DATA);
+  await bike.startNotifications();
+  bike.addEventListener('characteristicvaluechanged', e => onBike(parseBike(e.target.value)));
+  ctrl = await svc.getCharacteristic(CONTROL);
+  await ctrl.startNotifications();
+  ctrl.addEventListener('characteristicvaluechanged', e => {
+    const d = new Uint8Array(e.target.value.buffer);
+    if (d[0] === 0x80 && d[2] !== 0x01) setT('comando 0x' + d[1].toString(16) + ' rifiutato (codice ' + d[2] + ')');
+  });
+  retries.t = 0;
+  setT('connesso a ' + (trainer.name || 'rullo'));
+  $('btnTrainer').textContent = 'Rullo ✓';
+  if (running && !paused && steps.length) { send([0x00]); send([0x07]); applyTarget(); }
+}
+function onTrainerDisc() {
+  ctrl = null; live.bikeT = 0;
+  $('btnTrainer').textContent = 'Connetti rullo';
+  if (retries.t < 10) {
+    retries.t++;
+    setT('connessione persa, riprovo (' + retries.t + '/10)…');
+    setTimeout(() => trainerGatt().catch(() => onTrainerDisc()), 2000);
+  } else setT('disconnesso');
+}
+$('btnTrainer').onclick = connectTrainer;
 
-async function connectGatt() {
-  const server = await device.gatt.connect();
+function send(bytes) {
+  const c = ctrl;
+  if (!c) return queue;
+  queue = queue.then(() => {
+    const v = new Uint8Array(bytes);
+    return c.writeValueWithResponse ? c.writeValueWithResponse(v) : c.writeValue(v);
+  }).catch(e => setT('errore comando: ' + e.message));
+  return queue;
+}
+const setPower = w => { w = Math.max(0, Math.round(w)); return send([0x05, w & 0xff, (w >> 8) & 0xff]); };
+
+function onBike(r) {
+  live.bikeT = Date.now();
+  if (r.power !== undefined) live.pw = r.power;
+  if (r.cad !== undefined) live.cad = Math.round(r.cad);
+  if (r.speed !== undefined) live.spd = Math.round(r.speed * 10) / 10;
+  showBike();
+}
+function showBike() {
+  $('vPower').textContent = live.pw ?? '--';
+  $('vCad').textContent = live.cad ?? '--';
+  $('vSpeed').textContent = live.spd !== null ? live.spd.toFixed(1) : '--';
+}
+
+// ---------- Bluetooth: fascia cardio ----------
+async function connectHR() {
+  if (!navigator.bluetooth) { setH('Web Bluetooth non disponibile: usa Chrome su Android (HTTPS).'); return; }
+  try {
+    const o = $('chkAll').checked ? { acceptAllDevices: true, optionalServices: [HR_SERVICE] } : { filters: [{ services: [HR_SERVICE] }] };
+    setH('ricerca…');
+    hrDev = await navigator.bluetooth.requestDevice(o);
+    hrDev.addEventListener('gattserverdisconnected', onHRDisc);
+    await hrGatt();
+  } catch (e) { setH('errore: ' + e.message); }
+}
+async function hrGatt() {
+  const server = await hrDev.gatt.connect();
   const svc = await server.getPrimaryService(HR_SERVICE);
   const ch = await svc.getCharacteristic(HR_CHAR);
   await ch.startNotifications();
   ch.addEventListener('characteristicvaluechanged', e => onHR(parseHR(e.target.value)));
-  retries = 0;
-  statusLine();
-  $('btnConnect').textContent = 'Connessa ✓';
-  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+  retries.h = 0;
+  setH('connessa a ' + (hrDev.name || 'fascia'));
+  $('btnHR').textContent = 'Fascia ✓';
 }
-
-async function onDisconnected() {
-  $('btnConnect').textContent = 'Connetti fascia';
-  lastT = null;
-  if (retries < 10) {
-    retries++;
-    setStatus('Connessione persa, riprovo (' + retries + '/10)…');
-    setTimeout(() => connectGatt().catch(() => onDisconnected()), 2000);
-  } else {
-    setStatus('Fascia disconnessa');
-  }
+function onHRDisc() {
+  live.hrT = 0;
+  $('btnHR').textContent = 'Connetti fascia';
+  if (retries.h < 10) {
+    retries.h++;
+    setH('connessione persa, riprovo (' + retries.h + '/10)…');
+    setTimeout(() => hrGatt().catch(() => onHRDisc()), 2000);
+  } else setH('disconnessa');
 }
+$('btnHR').onclick = connectHR;
 
-// Heart Rate Measurement (0x2A37)
-function parseHR(dv) {
-  const f = dv.getUint8(0); let o = 1, bpm;
-  if (f & 1) { bpm = dv.getUint16(o, true); o += 2; } else { bpm = dv.getUint8(o); o += 1; }
-  const contactSupported = !!(f & 4), contact = !!(f & 2);
-  return { bpm, noContact: contactSupported && !contact };
-}
-
-// ---------- Start / Stop ----------
-function updateButtons() {
-  $('btnStart').disabled = recording;
-  $('btnStop').disabled = !recording;
-  $('btnReset').disabled = recording;
-  $('rec').textContent = recording ? '● REC' : '';
-}
-$('btnStart').onclick = async () => {
-  if (!isConnected()) { await connectDevice(); if (!isConnected()) return; }
-  recording = true; lastT = null;
-  updateButtons(); statusLine();
-};
-$('btnStop').onclick = () => {
-  recording = false; lastT = null;
-  updateButtons();
-  setStatus(samples.length ? 'Registrazione ferma – puoi esportare il CSV o riprendere con Start' : 'Registrazione ferma');
-};
-
-// ---------- Dati ----------
 function onHR({ bpm, noContact }) {
-  if (noContact) { setStatus('Nessun contatto con la pelle: inumidisci la fascia'); return; }
+  if (noContact) { setH('nessun contatto con la pelle: inumidisci la fascia'); return; }
   if (!bpm) return;
-  const z = zoneOf(bpm);
-  showLive(bpm, z);
-  if (!recording) return;
-  const now = Date.now();
-  if (lastT !== null) {
-    const dt = Math.min((now - lastT) / 1000, 5);
-    recSecs += dt;
-    zoneSecs[z] = (zoneSecs[z] || 0) + dt;
-  }
-  lastT = now;
-  samples.push({ rec: recSecs, bpm });
-  statusLine();
-  renderStats();
+  live.hr = bpm; live.hrT = Date.now();
+  setH('connessa a ' + (hrDev && hrDev.name ? hrDev.name : 'fascia'));
+  showHR();
 }
-
-function showLive(bpm, z) {
-  $('bpm').textContent = bpm;
+function showHR() {
+  if (live.hr === null) return;
+  const zs = getZones(), z = zoneIndex(zs, live.hr);
+  $('bpm').textContent = live.hr;
   $('hero').style.borderColor = zoneColor(z);
-  $('zone').textContent = zoneName(z);
+  $('zone').textContent = z < 0 ? 'Sotto le zone' : zs[z].name;
   $('zone').style.color = zoneColor(z);
 }
 
-function renderStats() {
-  const vals = samples.map(s => s.bpm);
-  if (!vals.length) return;
-  $('vAvg').textContent = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
-  $('vMax').textContent = Math.max(...vals);
-  $('vMin').textContent = Math.min(...vals);
-  $('vTime').textContent = mmss(recSecs);
+// ---------- Allenamento ----------
+const ftp = () => Number($('ftp').value) || 200;
+const targetW = () => Math.round(ftp() * Math.max(0, steps[idx].pct + adj) / 100);
+const hasPlan = () => steps.length > 0 && idx < steps.length;
+
+function applyTarget() {
+  if (!hasPlan()) return;
+  setPower(targetW());
+  render();
+}
+
+async function acquireWake() {
+  try { wakeLock = await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release', () => { wakeLock = null; }); } catch (e) {}
+}
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && running && !wakeLock) acquireWake(); });
+
+function updateButtons() {
+  $('btnStart').disabled = running;
+  $('btnPause').disabled = !running;
+  $('btnStop').disabled = !running;
+  $('btnReset').disabled = running;
+  $('rec').textContent = running ? (paused ? '❚❚ IN PAUSA' : '● REC') : '';
+  $('btnPause').textContent = paused ? '▶ Riprendi' : '⏸ Pausa';
+}
+
+async function startSession() {
+  if (running) return;
+  steps = parseWorkout($('workout').value);
+  totalDur = steps.reduce((a, s) => a + s.dur, 0);
+  idx = 0; stepElapsed = 0; elapsed = 0; adj = 0;
+  session = newSession();
+  running = true; paused = false;
+  acquireWake();
+  if (steps.length) {
+    if (trainerOk()) { send([0x00]); send([0x07]); applyTarget(); }
+    else setT('non connesso: gli intervalli sono solo una guida, il rullo non viene controllato');
+  }
+  timer = setInterval(tick, 1000);
+  updateButtons(); saveSession(); render();
+}
+
+function tick() {
+  if (!running || paused) return;
+  elapsed++;
+  const fb = trainerOk() && fresh(live.bikeT), fh = fresh(live.hrT);
+  session.pw.push(fb ? live.pw : null);
+  session.cad.push(fb ? live.cad : null);
+  session.spd.push(fb ? live.spd : null);
+  session.hr.push(fh ? live.hr : null);
+  session.tg.push(hasPlan() ? targetW() : null);
+  if (hasPlan()) {
+    stepElapsed++;
+    if (stepElapsed >= steps[idx].dur) {
+      idx++; stepElapsed = 0;
+      if (idx >= steps.length) { stopSession(true); return; }
+      if (navigator.vibrate) navigator.vibrate(300);
+      applyTarget();
+    }
+  }
+  if (elapsed % 10 === 0) saveSession();
+  render();
+}
+
+function togglePause() {
+  if (!running) return;
+  paused = !paused;
+  if (paused) send([0x08, 0x02]);
+  else { send([0x07]); applyTarget(); }
+  updateButtons();
+}
+
+function stopSession(finished) {
+  clearInterval(timer); timer = null;
+  running = false; paused = false;
+  if (trainerOk()) send([0x08, 0x01]);
+  if (wakeLock) { wakeLock.release().catch(() => {}); wakeLock = null; }
+  saveSession(); updateButtons(); render();
+  $('barFill').style.width = finished ? '100%' : $('barFill').style.width;
+  $('sessInfo').textContent = (finished ? 'Allenamento completato 🎉 – ' : 'Fermato – ') + 'sessione salvata (' + mmss(elapsed) + '). Esporta il CSV se vuoi tenerla.';
+}
+
+$('btnStart').onclick = startSession;
+$('btnPause').onclick = togglePause;
+$('btnStop').onclick = () => stopSession(false);
+const bump = d => { adj += d; if (running && !paused) applyTarget(); else $('adjInfo').textContent = 'Regolazione: ' + (adj > 0 ? '+' : '') + adj + '%'; };
+$('btnPlus').onclick = () => bump(5);
+$('btnMinus').onclick = () => bump(-5);
+$('ftp').onchange = () => { store.set('ftp', $('ftp').value); if (running && !paused) applyTarget(); };
+$('workout').onchange = () => store.set('workout', $('workout').value);
+
+// ---------- Salvataggio ed export ----------
+function saveSession() { store.set('session', JSON.stringify(session)); }
+function loadSession() {
+  try {
+    const s = JSON.parse(store.get('session') || 'null');
+    if (!s || !['pw', 'cad', 'spd', 'hr', 'tg'].every(k => Array.isArray(s[k]))) return null;
+    const n = s.tg.length;
+    if (!n || !['pw', 'cad', 'spd', 'hr'].every(k => s[k].length === n)) return null;
+    return s;
+  } catch (e) { return null; }
+}
+$('btnCsv').onclick = () => {
+  if (!session.tg.length) { $('sessInfo').textContent = 'Nessun dato da esportare: premi Start per registrare'; return; }
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([toCSV(session)], { type: 'text/csv' }));
+  a.download = 'allenamento_' + String(session.start).slice(0, 16).replace(/[:T]/g, '-') + '.csv';
+  a.click();
+};
+$('btnReset').onclick = () => {
+  session = newSession(); elapsed = 0; store.set('session', null);
+  $('barFill').style.width = '0'; $('sessInfo').textContent = '';
+  render();
+};
+
+// ---------- Visualizzazione ----------
+function avgMax(a) {
+  let s = 0, n = 0, mx = -Infinity;
+  for (const v of a) if (v !== null) { s += v; n++; if (v > mx) mx = v; }
+  return n ? { avg: Math.round(s / n), max: mx } : null;
+}
+
+function render() {
+  $('vTime').textContent = mmss(elapsed);
+  if (running && hasPlan()) {
+    $('vTarget').textContent = targetW();
+    $('vStepLeft').textContent = mmss(steps[idx].dur - stepElapsed);
+    $('vTotLeft').textContent = mmss(totalDur - elapsed);
+    $('barFill').style.width = (100 * elapsed / totalDur) + '%';
+    $('stepInfo').textContent = 'Intervallo ' + (idx + 1) + ' / ' + steps.length + ' – ' + steps[idx].pct + '% FTP';
+    $('adjInfo').textContent = 'Regolazione: ' + (adj > 0 ? '+' : '') + adj + '%';
+  } else if (!running) {
+    $('vTarget').textContent = '--'; $('vStepLeft').textContent = '--:--'; $('vTotLeft').textContent = '--:--';
+    $('stepInfo').textContent = '';
+  }
+  const h = avgMax(session.hr), p = avgMax(session.pw);
+  $('vHrAvg').textContent = h ? h.avg : '--';
+  $('vHrMax').textContent = h ? h.max : '--';
+  $('vPwAvg').textContent = p ? p.avg : '--';
   renderZones();
   drawChart();
 }
@@ -314,48 +544,48 @@ function renderStats() {
 function drawChart() {
   const c = $('chart'), g = c.getContext('2d');
   g.clearRect(0, 0, c.width, c.height);
-  const win = samples.slice(-300); // ultimi ~5 minuti
-  if (win.length < 2) return;
-  const lo = Math.max(40, Math.min(...win.map(s => s.bpm)) - 5);
-  const hi = Math.max(...win.map(s => s.bpm)) + 5;
-  g.lineWidth = 3; g.lineJoin = 'round'; g.strokeStyle = '#ff5a6e';
-  g.beginPath();
-  win.forEach((s, i) => {
-    const x = i / (win.length - 1) * c.width;
-    const y = c.height - (s.bpm - lo) / (hi - lo) * (c.height - 20) - 10;
-    i ? g.lineTo(x, y) : g.moveTo(x, y);
-  });
-  g.stroke();
+  const n = session.tg.length; if (n < 2) return;
+  const from = Math.max(0, n - 600);
+  const pw = session.pw.slice(from), tg = session.tg.slice(from), hr = session.hr.slice(from);
+  const nn = a => a.filter(v => v !== null);
+  const maxP = Math.max(100, ...nn(pw), ...nn(tg)) + 20;
+  const hv = nn(hr);
+  const lo = hv.length ? Math.max(40, Math.min(...hv) - 5) : 0, hi = hv.length ? Math.max(...hv) + 5 : 1;
+  const H = c.height, X = i => i / Math.max(pw.length - 1, 1) * c.width;
+  const yP = v => H - v / maxP * (H - 20) - 10;
+  const yH = v => H - (v - lo) / (hi - lo) * (H - 20) - 10;
+  const line = (arr, Y, color, w, dash) => {
+    g.beginPath(); g.strokeStyle = color; g.lineWidth = w; g.lineJoin = 'round'; g.setLineDash(dash || []);
+    let pen = false;
+    arr.forEach((v, i) => {
+      if (v === null) { pen = false; return; }
+      pen ? g.lineTo(X(i), Y(v)) : g.moveTo(X(i), Y(v));
+      pen = true;
+    });
+    g.stroke(); g.setLineDash([]);
+  };
+  line(tg, yP, '#f5a623', 2, [8, 6]);
+  line(pw, yP, '#4aa3ff', 3);
+  line(hr, yH, '#ff5a6e', 3);
   g.fillStyle = '#888'; g.font = '20px sans-serif';
-  g.fillText(hi, 6, 22); g.fillText(lo, 6, c.height - 8);
+  g.fillText(Math.round(maxP) + ' W', 6, 22);
+  if (hv.length) g.fillText(hi + ' bpm', c.width - 90, 22);
 }
-
-$('btnReset').onclick = () => {
-  samples = []; zoneSecs = {}; recSecs = 0; lastT = null;
-  ['vAvg', 'vMax', 'vMin'].forEach(id => $(id).textContent = '--');
-  $('vTime').textContent = '00:00'; $('bpm').textContent = '--'; $('zone').innerHTML = '&nbsp;';
-  $('hero').style.borderColor = '#333';
-  $('chart').getContext('2d').clearRect(0, 0, 800, 320);
-  renderZones();
-};
-
-$('btnCsv').onclick = () => {
-  if (!samples.length) { setStatus('Nessun dato da esportare: premi Start per registrare'); return; }
-  const csv = 'secondi,bpm\n' + samples.map(s => s.rec.toFixed(0) + ',' + s.bpm).join('\n');
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-  a.download = 'cardio_' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.csv';
-  a.click();
-};
 
 // ---------- Avvio ----------
 (function init() {
   const mh = store.get('maxhr'); if (mh) $('maxhr').value = mh;
-  try { const z = JSON.parse(store.get('zones') || 'null'); if (Array.isArray(z) && z.length) customZones = z; } catch (e) {}
-  if (customZones) { try { customZones = parseZones(zonesToText(customZones)); } catch (e) { customZones = null; } }
+  const f = store.get('ftp'); if (f) $('ftp').value = f;
+  const w = store.get('workout'); if (w) $('workout').value = w;
+  try { const z = JSON.parse(store.get('zones') || 'null'); if (Array.isArray(z) && z.length) customZones = parseZones(zonesToText(z)); } catch (e) { customZones = null; }
   $('zonesTxt').value = zonesToText(getZones());
   if (customZones) msg('Zone personalizzate caricate (' + customZones.length + ')');
-  renderZones(); updateButtons();
+  const saved = loadSession();
+  if (saved) {
+    session = saved; elapsed = saved.tg.length;
+    $('sessInfo').textContent = 'Ultima sessione ripristinata (' + mmss(elapsed) + ', ' + new Date(saved.start).toLocaleString('it-IT') + '): puoi esportarla in CSV.';
+  }
+  updateButtons(); render();
 })();
 </script>
 </body>

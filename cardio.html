@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cardio</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, sans-serif; background: #111; color: #eee; padding: 16px; max-width: 900px; margin-inline: auto; }
+  h1 { font-size: 20px; margin: 0 0 12px; }
+  button, .filebtn { font-size: 18px; padding: 14px 20px; border: 0; border-radius: 10px; background: #2d6cdf; color: #fff; display: inline-block; }
+  button.sec, .filebtn { background: #333; }
+  button.red { background: #c0392b; }
+  button.green { background: #1e8e4e; }
+  button:disabled { opacity: .4; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 12px 0; }
+  #status { color: #999; font-size: 14px; }
+  #hero { text-align: center; border-radius: 16px; padding: 18px; background: #1c1c1c; border: 3px solid #333; }
+  #bpm { font-size: 110px; font-weight: 800; line-height: 1; }
+  #zone { font-size: 20px; margin-top: 6px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 10px; }
+  .box { background: #1c1c1c; border-radius: 12px; padding: 10px; text-align: center; }
+  .box .v { font-size: 28px; font-weight: 700; }
+  .box .l { font-size: 12px; color: #999; }
+  canvas { width: 100%; height: 160px; background: #1c1c1c; border-radius: 12px; margin-top: 10px; }
+  input[type=number] { width: 90px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 16px; }
+  textarea { width: 100%; height: 140px; background: #1c1c1c; color: #eee; border: 1px solid #333; border-radius: 8px; padding: 10px; font-size: 15px; font-family: monospace; }
+  #zones div { display: flex; justify-content: space-between; padding: 6px 10px; border-left: 8px solid; margin: 4px 0; background: #1c1c1c; border-radius: 6px; }
+  details { background: #1c1c1c; border-radius: 12px; padding: 10px 14px; margin-top: 12px; }
+  summary { font-size: 17px; padding: 6px 0; }
+  details p, #zonesMsg { font-size: 13px; color: #999; }
+  #zonesMsg.err { color: #ff6b6b; }
+  #rec { font-size: 15px; color: #ff6b6b; }
+</style>
+</head>
+<body>
+<h1>❤️ Fascia cardio</h1>
+
+<div class="row">
+  <button id="btnConnect">Connetti fascia</button>
+  <label><input type="checkbox" id="chkAll"> mostra tutti i dispositivi</label>
+</div>
+<div id="status">Non connessa</div>
+
+<div class="row">
+  <button id="btnStart" class="green">▶ Start</button>
+  <button id="btnStop" class="red" disabled>⏹ Stop</button>
+  <span id="rec"></span>
+</div>
+
+<div id="hero">
+  <div id="bpm">--</div>
+  <div>bpm</div>
+  <div id="zone">&nbsp;</div>
+</div>
+
+<div class="grid">
+  <div class="box"><div class="v" id="vTime">00:00</div><div class="l">Tempo</div></div>
+  <div class="box"><div class="v" id="vAvg">--</div><div class="l">Media</div></div>
+  <div class="box"><div class="v" id="vMax">--</div><div class="l">Max</div></div>
+  <div class="box"><div class="v" id="vMin">--</div><div class="l">Min</div></div>
+</div>
+
+<canvas id="chart" width="800" height="320"></canvas>
+
+<div class="row">
+  <label>FC max <input type="number" id="maxhr" value="190" min="120" max="230"></label>
+  <button class="sec" id="btnReset">Azzera</button>
+  <button class="sec" id="btnCsv">Esporta CSV</button>
+</div>
+
+<div id="zones"></div>
+
+<details id="zonesCfg">
+  <summary>Zone cardio personalizzate</summary>
+  <p>Una zona per riga: <b>nome, min, max</b> in bpm (anche solo “min, max”). Oppure un file .json con una lista di zone
+  <code>[{"name":"Z1","min":100,"max":120}, …]</code> o con i soli limiti superiori <code>[120,140,155,170,185]</code>.
+  Se non importi nulla, le zone sono calcolate in % della FC max.</p>
+  <textarea id="zonesTxt" spellcheck="false"></textarea>
+  <div class="row">
+    <button class="sec" id="btnApplyZones">Applica</button>
+    <label class="filebtn">Importa file<input type="file" id="zonesFile" accept=".txt,.csv,.json,text/plain,text/csv,application/json" hidden></label>
+    <button class="sec" id="btnAutoZones">Zone automatiche</button>
+  </div>
+  <div id="zonesMsg"></div>
+</details>
+
+<script>
+const $ = id => document.getElementById(id);
+const HR_SERVICE = 0x180D, HR_CHAR = 0x2A37;
+const PALETTE = ['#7f8c8d', '#3498db', '#2ecc71', '#f1c40f', '#f39c12', '#e74c3c', '#9b59b6'];
+
+let device = null, samples = [], zoneSecs = {}, recSecs = 0, lastT = null;
+let recording = false, wakeLock = null, retries = 0, customZones = null;
+
+const store = {
+  get(k) { try { return localStorage.getItem(k); } catch (e) { return null; } },
+  set(k, v) { try { v === null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch (e) {} },
+};
+const mmss = s => String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+const isConnected = () => !!(device && device.gatt && device.gatt.connected);
+function setStatus(t) { $('status').textContent = t; }
+function statusLine() {
+  const n = device && device.name ? device.name : 'fascia';
+  setStatus((recording ? 'Registrazione in corso – ' : 'Connessa a ') + n);
+}
+
+// <pure>
+function zoneIndex(zones, bpm) {
+  for (let i = zones.length - 1; i >= 0; i--) if (bpm >= zones[i].min) return i;
+  return -1;
+}
+function zonesToText(zs) { return zs.map(z => `${z.name}, ${z.min}, ${z.max}`).join('\n'); }
+function parseZones(txt) {
+  txt = (txt || '').trim();
+  if (!txt) throw new Error('Nessuna zona inserita');
+  let zs = [];
+  if (txt[0] === '[' || txt[0] === '{') {
+    let j;
+    try { j = JSON.parse(txt); } catch (e) { throw new Error('JSON non valido'); }
+    if (!Array.isArray(j)) j = j && j.zones;
+    if (!Array.isArray(j)) throw new Error('Nel JSON serve una lista di zone');
+    if (j.length && j.every(x => typeof x === 'number')) {
+      let prev = -1;
+      zs = j.map((u, i) => { const z = { name: 'Z' + (i + 1), min: prev + 1, max: u }; prev = u; return z; });
+    } else {
+      zs = j.map((x, i) => ({
+        name: String((x && (x.name || x.nome)) || 'Z' + (i + 1)),
+        min: Number(x && (x.min ?? x.da)),
+        max: Number(x && (x.max ?? x.a)),
+      }));
+    }
+  } else {
+    for (let line of txt.split(/\r?\n/)) {
+      line = line.trim();
+      if (!line || line[0] === '#') continue;
+      const p = line.split(/[;,\t]/).map(s => s.trim());
+      let name, min, max;
+      if (p.length >= 3) { name = p[0]; min = Number(p[1]); max = Number(p[2]); }
+      else if (p.length === 2) { name = 'Z' + (zs.length + 1); min = Number(p[0]); max = Number(p[1]); }
+      else continue;
+      if (isNaN(min) || isNaN(max)) { if (zs.length === 0) continue; throw new Error('Riga non valida: ' + line); }
+      zs.push({ name: name || 'Z' + (zs.length + 1), min, max });
+    }
+  }
+  if (!zs.length) throw new Error('Nessuna zona valida trovata');
+  if (zs.length > 10) throw new Error('Massimo 10 zone');
+  zs.forEach((z, i) => {
+    if (!isFinite(z.min) || !isFinite(z.max)) throw new Error('Valori non numerici nella zona ' + (i + 1));
+    if (z.min > z.max) throw new Error('Zona "' + z.name + '": il minimo supera il massimo');
+    if (i > 0 && z.min <= zs[i - 1].min) throw new Error('Le zone devono essere in ordine crescente (' + z.name + ')');
+  });
+  return zs;
+}
+// </pure>
+
+// ---------- Zone ----------
+const maxHR = () => Number($('maxhr').value) || 190;
+function autoZones() {
+  const m = maxHR(), pct = [0, 60, 70, 80, 90];
+  const names = ['Z1 Recupero', 'Z2 Fondo', 'Z3 Medio', 'Z4 Soglia', 'Z5 Massimale'];
+  return names.map((n, i) => ({
+    name: n,
+    min: Math.round(m * pct[i] / 100),
+    max: i < 4 ? Math.round(m * pct[i + 1] / 100) - 1 : m,
+  }));
+}
+const getZones = () => customZones || autoZones();
+const zoneOf = bpm => zoneIndex(getZones(), bpm);
+const zoneColor = i => i < 0 ? '#555' : PALETTE[i % PALETTE.length];
+const zoneName = i => i < 0 ? 'Sotto le zone' : getZones()[i].name;
+
+function renderZones() {
+  const zs = getZones();
+  let html = zs.map((z, i) =>
+    `<div style="border-color:${zoneColor(i)}"><span>${z.name} <small>(${z.min}–${z.max})</small></span><span>${mmss(zoneSecs[i] || 0)}</span></div>`).join('');
+  if (zoneSecs[-1] > 0) html = `<div style="border-color:#555"><span>Sotto le zone</span><span>${mmss(zoneSecs[-1])}</span></div>` + html;
+  $('zones').innerHTML = html;
+}
+
+function zonesChanged() {
+  zoneSecs = {};
+  $('zonesTxt').value = zonesToText(getZones());
+  renderZones();
+}
+function msg(t, err) { const m = $('zonesMsg'); m.textContent = t; m.className = err ? 'err' : ''; }
+
+function applyZonesText(txt) {
+  try {
+    customZones = parseZones(txt);
+    store.set('zones', JSON.stringify(customZones));
+    zonesChanged();
+    msg('Zone applicate: ' + customZones.length + (samples.length ? ' (i tempi per zona sono stati azzerati)' : ''));
+  } catch (e) { msg(e.message, true); }
+}
+$('btnApplyZones').onclick = () => applyZonesText($('zonesTxt').value);
+$('zonesFile').onchange = async e => {
+  const f = e.target.files[0]; if (!f) return;
+  $('zonesTxt').value = await f.text();
+  applyZonesText($('zonesTxt').value);
+  e.target.value = '';
+};
+$('btnAutoZones').onclick = () => {
+  customZones = null; store.set('zones', null); zonesChanged();
+  msg('Zone automatiche (% della FC max)');
+};
+$('maxhr').onchange = () => { store.set('maxhr', $('maxhr').value); if (!customZones) zonesChanged(); };
+
+// ---------- Bluetooth ----------
+async function connectDevice() {
+  if (!navigator.bluetooth) { setStatus('Web Bluetooth non disponibile: usa Chrome su Android (HTTPS).'); return; }
+  try {
+    const opts = $('chkAll').checked
+      ? { acceptAllDevices: true, optionalServices: [HR_SERVICE] }
+      : { filters: [{ services: [HR_SERVICE] }] };
+    setStatus('Ricerca…');
+    device = await navigator.bluetooth.requestDevice(opts);
+    device.addEventListener('gattserverdisconnected', onDisconnected);
+    await connectGatt();
+  } catch (err) {
+    setStatus('Errore: ' + err.message);
+  }
+}
+$('btnConnect').onclick = connectDevice;
+
+async function connectGatt() {
+  const server = await device.gatt.connect();
+  const svc = await server.getPrimaryService(HR_SERVICE);
+  const ch = await svc.getCharacteristic(HR_CHAR);
+  await ch.startNotifications();
+  ch.addEventListener('characteristicvaluechanged', e => onHR(parseHR(e.target.value)));
+  retries = 0;
+  statusLine();
+  $('btnConnect').textContent = 'Connessa ✓';
+  try { wakeLock = await navigator.wakeLock.request('screen'); } catch (e) {}
+}
+
+async function onDisconnected() {
+  $('btnConnect').textContent = 'Connetti fascia';
+  lastT = null;
+  if (retries < 10) {
+    retries++;
+    setStatus('Connessione persa, riprovo (' + retries + '/10)…');
+    setTimeout(() => connectGatt().catch(() => onDisconnected()), 2000);
+  } else {
+    setStatus('Fascia disconnessa');
+  }
+}
+
+// Heart Rate Measurement (0x2A37)
+function parseHR(dv) {
+  const f = dv.getUint8(0); let o = 1, bpm;
+  if (f & 1) { bpm = dv.getUint16(o, true); o += 2; } else { bpm = dv.getUint8(o); o += 1; }
+  const contactSupported = !!(f & 4), contact = !!(f & 2);
+  return { bpm, noContact: contactSupported && !contact };
+}
+
+// ---------- Start / Stop ----------
+function updateButtons() {
+  $('btnStart').disabled = recording;
+  $('btnStop').disabled = !recording;
+  $('btnReset').disabled = recording;
+  $('rec').textContent = recording ? '● REC' : '';
+}
+$('btnStart').onclick = async () => {
+  if (!isConnected()) { await connectDevice(); if (!isConnected()) return; }
+  recording = true; lastT = null;
+  updateButtons(); statusLine();
+};
+$('btnStop').onclick = () => {
+  recording = false; lastT = null;
+  updateButtons();
+  setStatus(samples.length ? 'Registrazione ferma – puoi esportare il CSV o riprendere con Start' : 'Registrazione ferma');
+};
+
+// ---------- Dati ----------
+function onHR({ bpm, noContact }) {
+  if (noContact) { setStatus('Nessun contatto con la pelle: inumidisci la fascia'); return; }
+  if (!bpm) return;
+  const z = zoneOf(bpm);
+  showLive(bpm, z);
+  if (!recording) return;
+  const now = Date.now();
+  if (lastT !== null) {
+    const dt = Math.min((now - lastT) / 1000, 5);
+    recSecs += dt;
+    zoneSecs[z] = (zoneSecs[z] || 0) + dt;
+  }
+  lastT = now;
+  samples.push({ rec: recSecs, bpm });
+  statusLine();
+  renderStats();
+}
+
+function showLive(bpm, z) {
+  $('bpm').textContent = bpm;
+  $('hero').style.borderColor = zoneColor(z);
+  $('zone').textContent = zoneName(z);
+  $('zone').style.color = zoneColor(z);
+}
+
+function renderStats() {
+  const vals = samples.map(s => s.bpm);
+  if (!vals.length) return;
+  $('vAvg').textContent = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length);
+  $('vMax').textContent = Math.max(...vals);
+  $('vMin').textContent = Math.min(...vals);
+  $('vTime').textContent = mmss(recSecs);
+  renderZones();
+  drawChart();
+}
+
+function drawChart() {
+  const c = $('chart'), g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  const win = samples.slice(-300); // ultimi ~5 minuti
+  if (win.length < 2) return;
+  const lo = Math.max(40, Math.min(...win.map(s => s.bpm)) - 5);
+  const hi = Math.max(...win.map(s => s.bpm)) + 5;
+  g.lineWidth = 3; g.lineJoin = 'round'; g.strokeStyle = '#ff5a6e';
+  g.beginPath();
+  win.forEach((s, i) => {
+    const x = i / (win.length - 1) * c.width;
+    const y = c.height - (s.bpm - lo) / (hi - lo) * (c.height - 20) - 10;
+    i ? g.lineTo(x, y) : g.moveTo(x, y);
+  });
+  g.stroke();
+  g.fillStyle = '#888'; g.font = '20px sans-serif';
+  g.fillText(hi, 6, 22); g.fillText(lo, 6, c.height - 8);
+}
+
+$('btnReset').onclick = () => {
+  samples = []; zoneSecs = {}; recSecs = 0; lastT = null;
+  ['vAvg', 'vMax', 'vMin'].forEach(id => $(id).textContent = '--');
+  $('vTime').textContent = '00:00'; $('bpm').textContent = '--'; $('zone').innerHTML = '&nbsp;';
+  $('hero').style.borderColor = '#333';
+  $('chart').getContext('2d').clearRect(0, 0, 800, 320);
+  renderZones();
+};
+
+$('btnCsv').onclick = () => {
+  if (!samples.length) { setStatus('Nessun dato da esportare: premi Start per registrare'); return; }
+  const csv = 'secondi,bpm\n' + samples.map(s => s.rec.toFixed(0) + ',' + s.bpm).join('\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+  a.download = 'cardio_' + new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-') + '.csv';
+  a.click();
+};
+
+// ---------- Avvio ----------
+(function init() {
+  const mh = store.get('maxhr'); if (mh) $('maxhr').value = mh;
+  try { const z = JSON.parse(store.get('zones') || 'null'); if (Array.isArray(z) && z.length) customZones = z; } catch (e) {}
+  if (customZones) { try { customZones = parseZones(zonesToText(customZones)); } catch (e) { customZones = null; } }
+  $('zonesTxt').value = zonesToText(getZones());
+  if (customZones) msg('Zone personalizzate caricate (' + customZones.length + ')');
+  renderZones(); updateButtons();
+})();
+</script>
+</body>
+</html>
